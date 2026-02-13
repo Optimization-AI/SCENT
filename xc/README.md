@@ -39,6 +39,9 @@ We select two image datasets and use the features extracted by pretrained models
       --out-dir 'dir/to/output' \
       --metadata-path 'path/to/metadata/catalog.csv'
     ```
+- After these steps, we obtain two tensor files under `dir/to/output`: `features.pt` and `labels.pt`. The `features.pt` file contains the extracted features, the `labels.pt` file contains the corresponding labels.
+- Then we need to split the features and labels into training, validation and testing sets, which can be done by taking different rows from the two tensor files.
+- Finally, store the splitted features and labels into `dir/to/features/{split}/features.pt` and `dir/to/features/{split}/labels.pt`, where `{split}` can be `train`, `val`, or `test`.
 
 ### Training
 
@@ -46,17 +49,84 @@ We select two image datasets and use the features extracted by pretrained models
     <summary>Sample script to run <b>SCENT</b> on Glint360K</summary>
 
 ```bash
-#!/bin/bash
-
 python -u train.py \
   --algorithm scent \
-  --data-dir 'features/glint360k/' \
+  --data-dir 'dir/to/features/' \
   --data-size 17091657 \
   --epochs 50 \
   --gamma 12.0 \
   --lr 5.0 \
   --name glint360k_scent \
+  --num-classes 360232
+```
+
+</details>
+
+<details>
+    <summary>Sample script to run <b>BSGD</b> on Glint360K</summary>
+
+```bash
+python -u train.py \
+  --algorithm bsgd \
+  --data-dir 'dir/to/features/' \
+  --data-size 17091657 \
+  --epochs 50 \
+  --gamma 1.0 \
+  --lr 1.0 \
+  --name glint360k_bsgd \
+  --num-classes 360232
+```
+
+</details>
+
+<details>
+    <summary>Sample script to run <b>ASGD</b> on Glint360K</summary>
+
+```bash
+python -u train.py \
+  --algorithm asgd \
+  --data-dir 'dir/to/features/' \
+  --data-size 17091657 \
+  --epochs 50 \
+  --gamma 1.0 \
+  --lr 0.5 \
+  --name glint360k_asgd \
+  --num-classes 360232
+```
+
+</details>
+
+<details>
+    <summary>Sample script to run <b>ASGD (Softplus)</b> on Glint360K</summary>
+
+```bash
+python -u train.py \
+  --algorithm softplus \
+  --data-dir 'dir/to/features/' \
+  --data-size 17091657 \
+  --epochs 50 \
+  --gamma 1.0 \
+  --lr 0.5 \
+  --name glint360k_softplus \
   --num-classes 360232 \
+  --softplus-rho 1e-3
+```
+
+</details>
+
+<details>
+    <summary>Sample script to run <b>SOX</b> on Glint360K</summary>
+
+```bash
+python -u train.py \
+  --algorithm sox \
+  --data-dir 'dir/to/features/' \
+  --data-size 17091657 \
+  --epochs 50 \
+  --gamma 1e-5 \
+  --lr 5.0 \
+  --name glint360k_sox \
+  --num-classes 360232
 ```
 
 </details>
