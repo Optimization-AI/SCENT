@@ -1,0 +1,11 @@
+.vscode/
+__pycache__/
+pretrained/
+datasets
+job_output/
+features/
+outputs/
+scripts/
+
+*.slurm
+*.json

@@ -1,0 +1,95 @@
+diff --git a/src/fast_clip/factory.py b/src/fast_clip/factory.py
+index f666cde..d472eeb 100644
+--- a/src/fast_clip/factory.py
++++ b/src/fast_clip/factory.py
+@@ -347,6 +347,8 @@ def create_loss(args):
+                         "gamma_decay_epochs": args.gamma_decay_epochs, "eps": args.fastclip_eps,
+                         "multiply_tau": args.multiply_tau,
+                         "dist_loss_weight": args.distill_weight, "loss_weight": args.loss_weight}
++        if args.nu_update == "scent":
++            loss_args.update({"is_scent": True})
+         if "global" in args.temperature_scheme:
+             return SogCLRLoss(**loss_args)
+         elif "individual" in args.temperature_scheme:
+diff --git a/src/fast_clip/loss.py b/src/fast_clip/loss.py
+index e544df1..7fbd451 100644
+--- a/src/fast_clip/loss.py
++++ b/src/fast_clip/loss.py
+@@ -784,6 +784,8 @@ class SogCLRLoss(nn.Module):
+                  loss_weight: float = 1.0,
+                  dist_loss_weight: float = 1.0,
+                  ssl_loss_weight: float = 1.0,
++                 is_sox: bool = True,
++                 is_scent: bool = False,
+                  ):
+         """Create an instance of Global Contrastive Loss with global temperature parameter."""
+         super(SogCLRLoss, self).__init__()
+@@ -802,6 +804,8 @@ class SogCLRLoss(nn.Module):
+         self.loss_weight = loss_weight
+         self.dist_loss_weight = dist_loss_weight
+         self.ssl_loss_weight = ssl_loss_weight
++        self.is_sox = is_sox
++        self.is_scent = is_scent
+ 
+         self.u_im = torch.zeros(data_size, device="cpu").reshape(-1, 1)
+         self.u_tt = torch.zeros(data_size, device="cpu").reshape(-1, 1)
+@@ -995,26 +999,28 @@ class SogCLRLoss(nn.Module):
+                                            dim=-1, keepdim=True) + math.log(self.eps)
+             logsumexp_tt = torch.logsumexp(diff_tt_shifted - math.log(self.eps * diff_tt.shape[1]),
+                                            dim=-1, keepdim=True) + math.log(self.eps)
+-        if self.gamma == 1.0:
+-            u_im = logsumexp_im
+-            u_tt = logsumexp_tt
++        bad_im_idx = torch.nonzero(
++            (u_im == 0.0).logical_or(u_im.isinf()).logical_or(u_im.isnan()), as_tuple=True)[0]
++        bad_tt_idx = torch.nonzero(
++            (u_tt == 0.0).logical_or(u_tt.isinf()).logical_or(u_tt.isnan()), as_tuple=True)[0]
++        if self.is_scent:
++            gamma_im = 1.0 / (1.0 + torch.exp(-u_im - self.gamma))
++            gamma_tt = 1.0 / (1.0 + torch.exp(-u_tt - self.gamma))
+         else:
+-            bad_im_idx = torch.nonzero(
+-                (u_im == 0.0).logical_or(u_im.isinf()).logical_or(u_im.isnan()), as_tuple=True)[0]
+-            bad_tt_idx = torch.nonzero(
+-                (u_tt == 0.0).logical_or(u_tt.isinf()).logical_or(u_tt.isnan()), as_tuple=True)[0]
+-            u_diff_im = u_im + math.log(1- self.gamma) - (logsumexp_im + math.log(self.gamma))
+-            u_diff_tt = u_tt + math.log(1- self.gamma) - (logsumexp_tt + math.log(self.gamma))
+-            u_im = torch.where(u_diff_im > 0,
+-                               u_im + math.log(1- self.gamma) + torch.log(1 + torch.exp(-u_diff_im)),
+-                               logsumexp_im + math.log(self.gamma) + torch.log(1 + torch.exp(u_diff_im)))
+-            u_tt = torch.where(u_diff_tt > 0,
+-                               u_tt + math.log(1- self.gamma) + torch.log(1 + torch.exp(-u_diff_tt)),
+-                               logsumexp_tt + math.log(self.gamma) + torch.log(1 + torch.exp(u_diff_tt)))
+-            if bad_im_idx.shape[0] > 0:
+-                u_im[bad_im_idx] = logsumexp_im[bad_im_idx].to(u_im.dtype)
+-            if bad_tt_idx.shape[0] > 0:
+-                u_tt[bad_tt_idx] = logsumexp_tt[bad_tt_idx].to(u_tt.dtype)
++            gamma_im = torch.tensor(self.gamma, device=u_im.device)
++            gamma_tt = torch.tensor(self.gamma, device=u_tt.device)
++        u_diff_im = u_im + torch.log(1- gamma_im) - (logsumexp_im + torch.log(gamma_im))
++        u_diff_tt = u_tt + torch.log(1- gamma_tt) - (logsumexp_tt + torch.log(gamma_tt))
++        u_im = torch.where(u_diff_im > 0,
++                            u_im + torch.log(1- gamma_im) + torch.log(1 + torch.exp(-u_diff_im)),
++                            logsumexp_im + torch.log(gamma_im) + torch.log(1 + torch.exp(u_diff_im)))
++        u_tt = torch.where(u_diff_tt > 0,
++                            u_tt + torch.log(1- gamma_tt) + torch.log(1 + torch.exp(-u_diff_tt)),
++                            logsumexp_tt + torch.log(gamma_tt) + torch.log(1 + torch.exp(u_diff_tt)))
++        if bad_im_idx.shape[0] > 0:
++            u_im[bad_im_idx] = logsumexp_im[bad_im_idx].to(u_im.dtype)
++        if bad_tt_idx.shape[0] > 0:
++            u_tt[bad_tt_idx] = logsumexp_tt[bad_tt_idx].to(u_tt.dtype)
+ 
+         with torch.no_grad():
+             weight_im = torch.exp(diff_im - u_im)
+diff --git a/src/training/params.py b/src/training/params.py
+index 42f414a..195f1ca 100644
+--- a/src/training/params.py
++++ b/src/training/params.py
+@@ -536,6 +536,7 @@ def parse_args(args):
+                         help="Rank for caching reference model features or synthetic texts.")
+     parser.add_argument("--loss_weight", type=float, default=1.0,
+                         help="Weight for the contrastive loss.")
++    parser.add_argument("--nu_update", type=str, default="sox", choices=["sox", "scent", "asgd", "softplus", "bsgd"])
+ 
+     args = parser.parse_args(args)
+ 
