@@ -22,6 +22,6 @@ def parse_args(args):
     p.add_argument("--softplus-rho", type=float, default=1.0)
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
     p.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
-    p.add_argument("--umax_delta", type=float, default=float("inf"),
+    p.add_argument("--umax-delta", type=float, default=float("inf"),
                    help="Delta parameter in U-max. When set to inf, U-max degenerates to ASGD.")
     return p.parse_args(args)
