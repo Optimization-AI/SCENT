@@ -48,6 +48,7 @@ We select two image datasets and use the features extracted by pretrained models
 <details open>
     <summary>Sample script to run <b>SCENT</b> on Glint360K</summary>
 
+In the command, gamma denotes the learning rate for the dual variable $\nu$, corresponding to $\alpha$ in the paper.
 ```bash
 python -u train.py \
   --algorithm scent \
@@ -71,7 +72,6 @@ python -u train.py \
   --data-dir 'dir/to/features/' \
   --data-size 17091657 \
   --epochs 50 \
-  --gamma 1.0 \
   --lr 1.0 \
   --name glint360k_bsgd \
   --num-classes 360232
@@ -82,6 +82,7 @@ python -u train.py \
 <details>
     <summary>Sample script to run <b>ASGD</b> on Glint360K</summary>
 
+In the command, gamma denotes the initial learning rate for the dual variable $\nu$, corresponding to $\alpha$ in the paper.
 ```bash
 python -u train.py \
   --algorithm asgd \
@@ -99,6 +100,7 @@ python -u train.py \
 <details>
     <summary>Sample script to run <b>ASGD (Softplus)</b> on Glint360K</summary>
 
+In the command, gamma denotes the initial learning rate for the dual variable $\nu$, corresponding to $\alpha$ in the paper.
 ```bash
 python -u train.py \
   --algorithm softplus \
@@ -110,6 +112,25 @@ python -u train.py \
   --name glint360k_softplus \
   --num-classes 360232 \
   --softplus-rho 1e-3
+```
+
+</details>
+
+<details>
+    <summary>Sample script to run <b>U-max</b> on Glint360K</summary>
+
+In the command, gamma denotes the initial learning rate for the dual variable $\nu$, corresponding to $\alpha$ in the paper.
+```bash
+python -u train.py \
+  --algorithm umax \
+  --data-dir 'dir/to/features/' \
+  --data-size 17091657 \
+  --epochs 50 \
+  --gamma 1.0 \
+  --lr 0.5 \
+  --name glint360k_umax \
+  --num-classes 360232 \
+  --umax-delta 1.0
 ```
 
 </details>

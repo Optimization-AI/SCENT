@@ -15,10 +15,13 @@ def parse_args(args):
     p.add_argument("--device", type=str, default=None)
     p.add_argument("--out-dir", type=str, default="outputs")
     p.add_argument("--gamma", type=float, default=1.0)
-    p.add_argument("--algorithm", type=str, default="sox", choices=["sox", "scent", "asgd", "softplus", "bsgd"])
+    p.add_argument("--algorithm", type=str, default="sox",
+                   choices=["sox", "scent", "asgd", "softplus", "bsgd", "umax"])
     p.add_argument("--warmup-epochs", type=int, default=0, help="Number of epochs for learning rate warmup")
     p.add_argument("--save-frequency", type=int, default=1, help="Frequency (in epochs) to save model checkpoints")
     p.add_argument("--softplus-rho", type=float, default=1.0)
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
     p.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
+    p.add_argument("--umax_delta", type=float, default=float("inf"),
+                   help="Delta parameter in U-max. When set to inf, U-max degenerates to ASGD.")
     return p.parse_args(args)

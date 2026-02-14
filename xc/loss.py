@@ -11,6 +11,7 @@ class SOXLoss(nn.Module):
                  gamma: float,
                  is_sox: bool = True,
                  is_scent: bool = False,
+                 umax_delta: float = float("inf"),
                  ) -> None:
         super().__init__()
         self.data_size = data_size
@@ -20,6 +21,7 @@ class SOXLoss(nn.Module):
         self.is_scent = is_scent
         if not self.is_sox and self.is_scent:
             raise ValueError("Cannot use SCENT when SOX is disabled.")
+        self.umax_delta = umax_delta
         self.nu = torch.zeros(data_size, device="cpu").reshape(-1, 1)
 
     def adjust_gamma(self, epoch: int, max_epoch: int) -> None:
@@ -49,12 +51,19 @@ class SOXLoss(nn.Module):
             gamma = self.gamma
         exp_logits_mean = torch.sum(torch.exp(logits), dim=-1, keepdim=True).detach() / (logits.shape[1] - 1)
         if self.is_sox:
+            # SOX, SCENT
             nu = torch.log((1- gamma) * torch.exp(nu) + gamma * exp_logits_mean)
             nu_for_grad = nu
         else:
+            # ASGD, U-max
             nu_for_grad = nu
             grad_nu = 1.0 - exp_logits_mean / torch.exp(nu)
             nu = nu - gamma * grad_nu
+            if self.umax_delta < float("inf"):
+                mb_nu = torch.logsumexp(logits, dim=-1, keepdim=True).detach() - math.log(logits.shape[1] - 1)
+                is_small = nu < mb_nu - self.umax_delta
+                nu[is_small] = mb_nu[is_small]
+                nu_for_grad = nu
         if bad_idx.shape[0] > 0:
             nu[bad_idx] = torch.log(exp_logits_mean[bad_idx])
             nu_for_grad[bad_idx] = nu[bad_idx]

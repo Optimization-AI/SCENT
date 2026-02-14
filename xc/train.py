@@ -190,6 +190,8 @@ def main():
         criterion = SoftPlusLoss(data_size=args.data_size, gamma=args.gamma, rho=args.softplus_rho)
     elif args.algorithm == "bsgd":
         criterion = PrimalLoss()
+    elif args.algorithm == "umax":
+        criterion = SOXLoss(data_size=args.data_size, gamma=args.gamma, is_sox=False, umax_delta=args.umax_delta)
     else:
         raise NotImplementedError(f"Algorithm {args.algorithm} not implemented.")
 
