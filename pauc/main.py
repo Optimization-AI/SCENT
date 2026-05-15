@@ -1,4 +1,3 @@
-from libauc.losses.auc import pAUC_DRO_Loss
 from libauc.losses.lsp import SCENT, ASGD, SOX, softplus, BSGD, DRO_Loss, U_MAX
 from libauc.optimizers import SGD
 from libauc.models import resnet18, resnet20, densenet121, densenet169
@@ -28,6 +27,26 @@ def set_all_seeds(SEED):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+def full_batch_pauc_dro(model, train_ds, batch_size, margin, lam, pos_len, num_workers=16):
+    """Train-set pAUC_DRO_Loss: mean over positives of KL-DRO surrogate vs all negatives."""
+    ld = torch.utils.data.DataLoader(train_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    dro = DRO_Loss(data_len=pos_len, margin=margin, myLambda=lam)
+    sf, lam_, m = dro.criterion, dro.myLambda, dro.margin
+    probs = []
+    with torch.no_grad():
+        for data, _, _ in ld:
+            probs.append(model(data.cuda()).cpu())
+    y = torch.cat(probs, dim=0).view(-1)
+    y = torch.sigmoid(y)
+    t = torch.from_numpy(np.asarray(train_ds.targets).squeeze()).to(y.dtype)
+    fp, fn = y[t == 1].cuda(), y[t == 0].cuda()
+    lnn = math.log(fn.numel())
+    parts = []
+    for s in range(0, fp.numel(), 2048):
+        u = sf(m, fp[s : s + 2048].unsqueeze(1) - fn.unsqueeze(0))
+        parts.append(lam_ * (torch.logsumexp(u / lam_, dim=1) - lnn))
+    return float(torch.cat(parts).mean())
+
 def get_model(model_name, num_classes=1, last_activation=None):
     """Get model by name"""
     model_map = {
@@ -39,17 +58,6 @@ def get_model(model_name, num_classes=1, last_activation=None):
     if model_name.lower() not in model_map:
         raise ValueError(f"Unsupported model: {model_name}. Supported models: {list(model_map.keys())}")
     return model_map[model_name.lower()](pretrained=False, num_classes=num_classes, last_activation=last_activation)
-
-def get_linear_layer_name(model_name):
-    """Get the name of the final linear layer based on model architecture"""
-    if model_name.lower() in ['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152']:
-        return 'fc'
-    elif model_name.lower() in ['resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110']:
-        return 'linear'
-    elif model_name.lower() in ['densenet121', 'densenet169', 'densenet201', 'densenet161']:
-        return 'classifier'
-    else:
-        raise ValueError(f"Unknown model: {model_name}")
 
 def get_dataset(dataset_name, root='./data'):
     """Get dataset by name"""
@@ -112,7 +120,7 @@ def parse_args():
     
     # Dataset parameters
     parser.add_argument('--dataset', type=str, default='cifar10',
-                        choices=['cifar10', 'cifar100', 'stl10', 'cat_vs_dog', 'melanoma'],
+                        choices=['cifar10', 'cifar100', 'stl10', 'cat_vs_dog'],
                         help='Dataset name (default: cifar10)')
 
     # Loss parameters
@@ -130,9 +138,9 @@ def parse_args():
     parser.add_argument('--momentum', type=float, default=0.9,
                         help='Momentum (default: 0.9)')
     parser.add_argument('--alpha_t', type=float, default=2.0,
-                        help='Alpha_t parameter for SCENT(default: 2.0)')
+                        help='If we set alpha_t to 2, then true alpha_t for SCENT is exp(-2)')
     parser.add_argument('--gamma', type=float, default=0.5,
-                        help='Alpha_t parameter for SOX(default: 0.5)')
+                        help='Gamma parameter for SOX(default: 0.5)')
     parser.add_argument('--lr_dual', type=float, default=1e-3,
                         help='Learning rate for dual variable(default: 1e-3)')
     parser.add_argument('--rho', type=float, default=1e-3,
@@ -145,7 +153,7 @@ def parse_args():
                         help='Lambda parameter for loss (default: 1.0)')
     parser.add_argument('--sampling_rate', type=float, default=0.5,
                         help='Sampling rate (default: 0.5)')
-    parser.add_argument('--seed', type=int, default=1,
+    parser.add_argument('--seed', type=int, default=79,
                         help='Random seed (default: 79)')
     parser.add_argument('--data_root', type=str, default='./data',
                         help='Root directory for datasets (default: ./data)')
@@ -178,24 +186,26 @@ if __name__ == '__main__':
         name=args.loss_fn+'_'+args.dataset+'_'+str(args.Lambda),
         entity=wandb_entity
     )
-    
+
+    wandb.define_metric("train_step")
+    wandb.define_metric("epoch")
+    wandb.define_metric("full_batch_pauc_dro_loss", step_metric="train_step")
+    wandb.define_metric("*", step_metric="epoch")
+
     # Parameters
     SEED = args.seed
     batch_size = args.batch_size
     total_epochs = args.total_epochs
     lr = args.lr
-    eta = 1e1 # learning rate for control negative samples weights
     decay_epochs = [20, 40]
-    decay_factor = 10
 
     gamma = args.gamma
     margin = args.margin
     Lambda = args.Lambda
 
     sampling_rate = args.sampling_rate
-    num_pos = round(sampling_rate*batch_size) 
-    num_neg = batch_size - num_pos
 
+    set_all_seeds(SEED)
     train_data, train_targets, test_data, test_targets = get_dataset(args.dataset, root=args.data_root)
     imratio = args.imratio
     generator = ImbalancedDataGenerator(shuffle=True, verbose=True, random_seed=0)
@@ -208,7 +218,6 @@ if __name__ == '__main__':
     trainloader = torch.utils.data.DataLoader(trainDataset, batch_size, sampler=sampler, shuffle=False, num_workers=1)
     testloader = torch.utils.data.DataLoader(testDataset, batch_size=batch_size, shuffle=False, num_workers=1)
 
-    set_all_seeds(SEED)
     model = get_model(args.model, num_classes=1, last_activation=None) 
     model = model.cuda()
 
@@ -259,8 +268,7 @@ if __name__ == '__main__':
         loss_fn = U_MAX(data_len=sampler.pos_len, delta=args.delta, lr_dual=args.lr_dual, margin=margin, myLambda=Lambda)
     elif args.loss_fn == 'CE':
         loss_fn = nn.BCEWithLogitsLoss()
-    else:
-        loss_fn = pAUC_DRO_Loss(data_len=sampler.pos_len, margin=margin, Lambda=Lambda)
+
     optimizer = SGD(trainable_params, loss_fn=loss_fn, mode='sgd', lr=lr, momentum=args.momentum)   
     dro_loss_fn = DRO_Loss(data_len=sampler.pos_len, margin=margin, myLambda=Lambda)
 
@@ -280,6 +288,7 @@ if __name__ == '__main__':
     test_best = 0
     train_list, test_list = [], []
     loss_list = []
+    train_step = 0
     for epoch in range(total_epochs):
         
         if scheduler is None and epoch in decay_epochs:
@@ -308,6 +317,14 @@ if __name__ == '__main__':
 
             dro_loss = dro_loss_fn(y_prob, targets, index=index)
             dro_loss_list.append(dro_loss.item())
+
+            if train_step % 500 == 0:
+                model.eval()
+                fpdro = full_batch_pauc_dro(model, trainDataset, batch_size, margin, Lambda, sampler.pos_len)
+                model.train()
+                wandb.log({"full_batch_pauc_dro_loss": fpdro, "train_step": train_step})
+
+            train_step += 1
 
         train_true = np.concatenate(train_true)
         train_pred = np.concatenate(train_pred)
@@ -354,21 +371,14 @@ if __name__ == '__main__':
             nu_val_mean = torch.log(loss_fn.u).mean()
             nu_val_max = torch.log(loss_fn.u).max()
             nu_val_min = torch.log(loss_fn.u).min()
-            nu_val = torch.log(loss_fn.u)
-            gamma_t = loss_fn.gamma_t
-            wandb.log({"gamma_t_mean": gamma_t_mean}, step=epoch)
-            wandb.log({"gamma_t_max": gamma_t_max}, step=epoch)
-            wandb.log({"gamma_t_min": gamma_t_min}, step=epoch)
-            wandb.log({"alpha_t": alpha_t}, step=epoch)
-            wandb.log({"nu_val_mean": nu_val_mean}, step=epoch)
-            wandb.log({"nu_val_max": nu_val_max}, step=epoch)
-            wandb.log({"nu_val_min": nu_val_min}, step=epoch)
+            wandb.log({"gamma_t_mean": gamma_t_mean, "epoch": epoch})
+            wandb.log({"gamma_t_max": gamma_t_max, "epoch": epoch})
+            wandb.log({"gamma_t_min": gamma_t_min, "epoch": epoch})
+            wandb.log({"alpha_t": alpha_t, "epoch": epoch})
+            wandb.log({"nu_val_mean": nu_val_mean, "epoch": epoch})
+            wandb.log({"nu_val_max": nu_val_max, "epoch": epoch})
+            wandb.log({"nu_val_min": nu_val_min, "epoch": epoch})
 
-
-        if 'softplus' in args.loss_fn:
-            rho = loss_fn.rho
-            wandb.log({"rho": rho}, step=epoch)
-        
         if 'SOX' in args.loss_fn:
             gamma_t_mean = loss_fn.gamma_t.mean()
             gamma_t_max = loss_fn.gamma_t.max()
@@ -376,36 +386,43 @@ if __name__ == '__main__':
             nu_val_mean = torch.log(loss_fn.u).mean()
             nu_val_max = torch.log(loss_fn.u).max()
             nu_val_min = torch.log(loss_fn.u).min()
-            nu_val = torch.log(loss_fn.u)
-            gamma_t = loss_fn.gamma_t
-            wandb.log({"gamma_t_mean": gamma_t_mean}, step=epoch)
-            wandb.log({"gamma_t_max": gamma_t_max}, step=epoch)
-            wandb.log({"gamma_t_min": gamma_t_min}, step=epoch)
-            wandb.log({"nu_val_mean": nu_val_mean}, step=epoch)
-            wandb.log({"nu_val_max": nu_val_max}, step=epoch)
-            wandb.log({"nu_val_min": nu_val_min}, step=epoch)
+            wandb.log({"gamma_t_mean": gamma_t_mean, "epoch": epoch})
+            wandb.log({"gamma_t_max": gamma_t_max, "epoch": epoch})
+            wandb.log({"gamma_t_min": gamma_t_min, "epoch": epoch})
+            wandb.log({"nu_val_mean": nu_val_mean, "epoch": epoch})
+            wandb.log({"nu_val_max": nu_val_max, "epoch": epoch})
+            wandb.log({"nu_val_min": nu_val_min, "epoch": epoch})
             
 
         if 'ASGD' in args.loss_fn:
             lr_dual = loss_fn.lr_dual
-            wandb.log({"lr_dual": lr_dual}, step=epoch)
+            wandb.log({"lr_dual": lr_dual, "epoch": epoch})
 
         if 'U_MAX' in args.loss_fn:
             delta = loss_fn.delta
-            wandb.log({"delta": delta}, step=epoch)
+            wandb.log({"delta": delta, "epoch": epoch})
             lr_dual = loss_fn.lr_dual
-            wandb.log({"lr_dual": lr_dual}, step=epoch)
+            wandb.log({"lr_dual": lr_dual, "epoch": epoch})
 
         if 'softplus' in args.loss_fn:
             rho = loss_fn.rho
-            wandb.log({"rho": rho}, step=epoch)
+            wandb.log({"rho": rho, "epoch": epoch})
             lr_dual = loss_fn.lr_dual
-            wandb.log({"lr_dual": lr_dual}, step=epoch)
+            wandb.log({"lr_dual": lr_dual, "epoch": epoch})
 
         dro_loss = np.mean(dro_loss_list)
-        wandb.log({"dro_loss": dro_loss}, step=epoch)
+        wandb.log({"mini_batch_pauc_dro_loss": dro_loss, "epoch": epoch})
         loss_list.append(dro_loss)
-        wandb.log({"train_pauc": train_pauc}, step=epoch)
-        wandb.log({"test_pauc": val_pauc}, step=epoch)
-        wandb.log({"test_best": test_best}, step=epoch)
-        print("epoch: %s, dro_loss: %.4f"%(epoch, dro_loss))
+        wandb.log({"train_pauc": train_pauc, "epoch": epoch})
+        wandb.log({"test_pauc": val_pauc, "epoch": epoch})
+        wandb.log({"test_best": test_best, "epoch": epoch})
+        print("epoch: %s, mini_batch_pauc_dro_loss: %.4f"%(epoch, dro_loss))
+
+    os.makedirs(args.save_dir, exist_ok=True)
+    final_save_path = os.path.join(
+        args.save_dir,
+        f'{args.model}_{args.dataset}_{args.loss_fn}_epoch{total_epochs}_final.pth'
+    )
+    checkpoint = {'model_state_dict': model.state_dict()}
+    torch.save(checkpoint, final_save_path)
+    print(f"Model saved to {final_save_path}")

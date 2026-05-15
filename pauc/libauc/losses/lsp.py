@@ -1,13 +1,6 @@
-import warnings
-from sklearn.exceptions import DataConversionWarning
-warnings.filterwarnings(action='ignore')
-from collections import Counter
 import math
-import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
-from PIL import Image
-from sklearn.decomposition import PCA
 import torch
 
 from .surrogate import get_surrogate_loss
@@ -294,7 +287,7 @@ class softplus(nn.Module):
 
         exponent = (surr_loss - self.alpha[index]) / myLambda + math.log(self.rho)
         exponent_ = (surr_loss - self.alpha[index]) / myLambda
-        w = torch.sigmoid(exponent_ + math.log(self.rho))
+        w = torch.exp(exponent_) / (1 + self.rho*torch.exp(exponent_))
 
         loss = (myLambda / self.rho) * F.softplus(exponent).mean() + self.alpha[index].mean()
 
@@ -328,10 +321,10 @@ class BSGD(nn.Module):
         y_true = check_tensor_shape(y_true, (-1, 1))
         index  = check_tensor_shape(index, (-1,))  
         pos_mask = (y_true == 1).squeeze().cpu()
-        neg_mask = (y_true == 0).squeeze().cpu()   # indices for positive samples only         
-        f_ps = y_pred[pos_mask]            # shape: (len(f_ps), 1) 
-        f_ns = y_pred[neg_mask].squeeze()  # shape: (len(f_ns), ) 
-        surr_loss = self.criterion(self.margin, f_ps - f_ns)   # shape: (len(f_ps), len(f_ns)) 
+        neg_mask = (y_true == 0).squeeze().cpu()         
+        f_ps = y_pred[pos_mask]  
+        f_ns = y_pred[neg_mask].squeeze()
+        surr_loss = self.criterion(self.margin, f_ps - f_ns)
         expLoss = torch.exp((surr_loss) / myLambda)
         expLoss = expLoss.mean(dim=1)
 
