@@ -31,10 +31,10 @@ The instructions for running the code can be found in the folder of individual t
 
 If you find this work useful in your research, please consider citing:
 ```bibtex
-@article{wei2026geometry,
+@inproceedings{wei2026geometry,
   title={A Geometry-Aware Efficient Algorithm for Compositional Entropic Risk Minimization},
   author={Wei, Xiyuan and Zhou, Linli and Wang, Bokun and Lin, Chih-Jen and Yang, Tianbao},
-  journal={arXiv preprint arXiv:2602.02877},
+  booktitle={Proceedings of International Conference on Machine Learning},
   year={2026}
 }
 ```
