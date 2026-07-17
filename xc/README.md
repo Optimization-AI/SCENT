@@ -151,3 +151,5 @@ python -u train.py \
 ```
 
 </details>
+
+*SGD with momentum*: To use the SGD with momentum optimizer, please run 'git apply momentum.patch' and set `--momentum 0.9`.

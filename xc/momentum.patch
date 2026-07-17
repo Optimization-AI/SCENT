@@ -1,0 +1,98 @@
+diff --git a/xc/optimizer.py b/xc/optimizer.py
+new file mode 100644
+index 0000000..6c563cd
+--- /dev/null
++++ b/xc/optimizer.py
+@@ -0,0 +1,61 @@
++import torch
++from torch.optim import SGD
++
++
++class SGDWithSelectiveMomentum(SGD):
++    """
++    SGD optimizer that only updates momentum for parameters with non-zero gradients.
++
++    This is useful when training sparse classifiers where not all classes (parameters)
++    receive gradients in each batch. Momentum is only accumulated for parameters that
++    actually have gradients in the current step.
++    """
++
++    @torch.no_grad()
++    def step(self, closure=None):
++        """Performs a single optimization step.
++
++        Args:
++            closure (callable, optional): A closure that reevaluates the model
++                and returns the loss.
++        """
++        loss = None
++        if closure is not None:
++            with torch.enable_grad():
++                loss = closure()
++
++        for group in self.param_groups:
++            weight_decay = group['weight_decay']
++            momentum = group['momentum']
++            dampening = group['dampening']
++            nesterov = group['nesterov']
++
++            for p in group['params']:
++                if p.grad is None:
++                    continue
++
++                d_p = p.grad
++
++                if weight_decay != 0 and d_p.abs().sum() > 0:
++                    d_p = d_p.add(p, alpha=weight_decay)
++
++                if momentum != 0:
++                    param_state = self.state[p]
++
++                    if 'momentum_buffer' not in param_state:
++                        buf = param_state['momentum_buffer'] = torch.clone(d_p).detach()
++                    else:
++                        buf = param_state['momentum_buffer']
++                        # Only update momentum for rows with non-zero gradients
++                        # For a weight matrix (num_classes, feature_dim), check if each row has any gradient
++                        has_grad = (d_p.abs().sum(dim=1) > 0) if d_p.dim() > 1 else (d_p.abs() > 0)
++                        buf[has_grad] = buf[has_grad] * momentum + d_p[has_grad] * (1 - dampening)
++
++                    if nesterov:
++                        d_p = d_p.add(buf, alpha=momentum)
++                    else:
++                        d_p = buf
++
++                p.add_(d_p, alpha=-group['lr'])
++
++        return loss
+diff --git a/xc/params.py b/xc/params.py
+index 9db22c9..3d02038 100644
+--- a/xc/params.py
++++ b/xc/params.py
+@@ -24,4 +24,5 @@ def parse_args(args):
+     p.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
+     p.add_argument("--umax-delta", type=float, default=float("inf"),
+                    help="Delta parameter in U-max. When set to inf, U-max degenerates to ASGD.")
++    p.add_argument("--momentum", type=float, default=0.0, help="Momentum factor for SGD optimizer")
+     return p.parse_args(args)
+diff --git a/xc/train.py b/xc/train.py
+index 432ef62..69ac032 100644
+--- a/xc/train.py
++++ b/xc/train.py
+@@ -15,6 +15,7 @@ from model.lin_model import LinearClassifier
+ from data.feat_data import FeaturesDataset
+ from loss import SOXLoss, SoftPlusLoss, PrimalLoss
+ from params import parse_args
++from optimizer import SGDWithSelectiveMomentum
+ 
+ def setup_logging(out_log_file=None):
+     logging.root.setLevel(level=logging.INFO)
+@@ -168,7 +169,7 @@ def main():
+ 
+     model = LinearClassifier(args.feature_dim, args.num_classes).to(device)
+ 
+-    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
++    optimizer = SGDWithSelectiveMomentum(model.parameters(), lr=args.lr, momentum=args.momentum)
+ 
+     if args.warmup_epochs > 0:
+         warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=args.warmup_epochs)
