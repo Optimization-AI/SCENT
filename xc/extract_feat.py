@@ -7,6 +7,7 @@ import csv
 from tqdm import tqdm
 import braceexpand
 import torch
+import torch.nn.functional as F
 import webdataset as wds
 from torchvision import transforms
 
@@ -118,6 +119,7 @@ def extract_feat_glint360k(args, dataloader, device, features_all, labels_all, i
         for images, labels, keys in pbar:
             images = images.to(device)
             features = model(images)
+            features = F.normalize(features, p=2, dim=1)
             features_all[keys] = features.to("cpu", dtype=torch.float)
             labels_all[keys] = labels.to("cpu", dtype=torch.int)
             is_cached_all[keys] = True
